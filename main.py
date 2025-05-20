@@ -2,8 +2,20 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import sqlite3
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # You can set this to your frontend URL for more security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 analyzer = SentimentIntensityAnalyzer()
 
 class Feedback(BaseModel):
