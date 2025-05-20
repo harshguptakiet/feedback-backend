@@ -1,15 +1,9 @@
-from fastapi import FastAPI, Form
+from fastapi import FastAPI
 from pydantic import BaseModel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 import sqlite3
-import csv
-from datetime import datetime
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
+from fastapi.middleware.cors import CORSMiddleware
 
-# DB Setup
 def init_db():
     conn = sqlite3.connect("feedback.db")
     cur = conn.cursor()
@@ -20,8 +14,10 @@ def init_db():
             event TEXT,
             text TEXT,
             sentiment TEXT,
-            rating INTEGER,
-            date TEXT
+            score REAL,
+            pos REAL,
+            neu REAL,
+            neg REAL
         )
     ''')
     conn.commit()
@@ -29,7 +25,6 @@ def init_db():
 
 init_db()
 
-# FastAPI App
 app = FastAPI()
 
 app.add_middleware(
@@ -46,21 +41,28 @@ class Feedback(BaseModel):
     name: str
     event: str
     feedback: str
-    rating: int
 
 @app.post("/submit")
 def submit_feedback(feedback: Feedback):
-    sentiment_score = analyzer.polarity_scores(feedback.feedback)['compound']
-    label = "positive" if sentiment_score > 0.05 else "negative" if sentiment_score < -0.05 else "neutral"
+    scores = analyzer.polarity_scores(feedback.feedback)
+    compound = scores['compound']
+    label = "positive" if compound > 0.05 else "negative" if compound < -0.05 else "neutral"
 
     conn = sqlite3.connect("feedback.db")
     cur = conn.cursor()
-    cur.execute("INSERT INTO feedback (name, event, text, sentiment, rating, date) VALUES (?, ?, ?, ?, ?, ?)",
-                (feedback.name, feedback.event, feedback.feedback, label, feedback.rating, datetime.now().strftime("%Y-%m-%d")))
+    cur.execute('''
+        INSERT INTO feedback (name, event, text, sentiment, score, pos, neu, neg)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (feedback.name, feedback.event, feedback.feedback, label,
+          compound, scores['pos'], scores['neu'], scores['neg']))
     conn.commit()
     conn.close()
 
-    return {"status": "success", "sentiment": label}
+    return {
+        "status": "success",
+        "sentiment": label,
+        "details": scores
+    }
 
 @app.get("/admin/summary")
 def get_summary():
@@ -68,35 +70,9 @@ def get_summary():
     cur = conn.cursor()
     cur.execute("SELECT sentiment, COUNT(*) FROM feedback GROUP BY sentiment")
     summary = dict(cur.fetchall())
-    cur.execute("SELECT name, event, text, sentiment, rating, date FROM feedback")
-    feedback = cur.fetchall()
-    cur.execute("SELECT DISTINCT event FROM feedback")
-    events = [row[0] for row in cur.fetchall()]
+
+    cur.execute("SELECT name, event, text, sentiment, score, pos, neu, neg FROM feedback")
+    feedbacks = cur.fetchall()
+
     conn.close()
-    return {"summary": summary, "feedback": feedback, "events": events}
-
-@app.get("/admin/export")
-def export_csv():
-    conn = sqlite3.connect("feedback.db")
-    cur = conn.cursor()
-    cur.execute("SELECT name, event, text, sentiment, rating, date FROM feedback")
-    rows = cur.fetchall()
-    with open("feedback.csv", "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Name", "Event", "Feedback", "Sentiment", "Rating", "Date"])
-        writer.writerows(rows)
-    return FileResponse("feedback.csv", media_type='text/csv', filename="feedback.csv")
-
-@app.get("/admin/wordcloud")
-def generate_wordcloud():
-    conn = sqlite3.connect("feedback.db")
-    cur = conn.cursor()
-    cur.execute("SELECT text FROM feedback")
-    text_data = " ".join(row[0] for row in cur.fetchall())
-    wordcloud = WordCloud(width=800, height=400).generate(text_data)
-    wordcloud.to_file("wordcloud.png")
-    return FileResponse("wordcloud.png", media_type="image/png")
-
-@app.get("/")
-def root():
-    return {"message": "Backend running"}
+    return {"summary": summary, "feedback": feedbacks}
